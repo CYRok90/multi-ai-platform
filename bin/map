@@ -1,33 +1,69 @@
 #!/usr/bin/env bash
-# map — Multi-AI Platform CLI
+# map — Multi-AI Platform CLI v0.2.0
 # Usage: map <command> [args]
 #
 # Commands:
-#   init [path]              Initialize a workspace (default: current directory)
-#   start <client> [task]    Start an LLM session with SESSIONS.md tracking
-#   status                   Show active sessions and wiki stats
-#   sync                     Re-inject protocol into CLAUDE.md, GEMINI.md, AGENTS.md
+#   init [path]                    Initialize a workspace + auto-configure hooks
+#   start <client> [task]          Start an LLM session with tracking
+#   hook start <client>            (Internal) Called by CLI SessionStart hooks
+#   hook end <client>              (Internal) Called by CLI SessionEnd hooks
+#   hook continue <session_id>     Continue a session from another CLI
+#   status                         Show active sessions and wiki stats
+#   sync                           Re-inject protocol into config files
 
 set -euo pipefail
 
-MAP_VERSION="0.1.0"
+MAP_VERSION="0.2.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
-# --- Colors ---
+# --- Colors (stderr only for hooks — stdout is for LLM context) ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log_ok()   { echo -e "${GREEN}[OK]${NC}   $1"; }
-log_info() { echo -e "${CYAN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_ok()   { echo -e "${GREEN}[OK]${NC}   $1" >&2; }
+log_info() { echo -e "${CYAN}[INFO]${NC} $1" >&2; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
 log_err()  { echo -e "${RED}[ERR]${NC}  $1" >&2; }
 
+# --- Helpers ---
+client_name() {
+    case "$1" in
+        claude) echo "Claude Code" ;;
+        gemini) echo "Gemini CLI" ;;
+        codex)  echo "Codex CLI" ;;
+        slack)  echo "Slack Bot" ;;
+        *)      echo "$1" ;;
+    esac
+}
+
+make_session_id() {
+    echo "${1}-$(date +%Y%m%d-%H%M)"
+}
+
+ensure_sessions_md() {
+    if [ ! -f "SESSIONS.md" ]; then
+        cp "$TEMPLATE_DIR/SESSIONS.md" "SESSIONS.md"
+    fi
+}
+
+ensure_sessions_dir() {
+    mkdir -p sessions
+}
+
+# --- Stale cleanup (>2h) ---
+cleanup_stale() {
+    [ ! -f "SESSIONS.md" ] && return 0
+    # Simple approach: just let stale entries be — next human review cleans up
+    # Full timestamp-based cleanup is complex with BSD date; keep it simple
+    return 0
+}
+
 # ============================================================
-# map init
+# map init (v2 — includes hook auto-registration)
 # ============================================================
 cmd_init() {
     local target="${1:-.}"
@@ -36,11 +72,11 @@ cmd_init() {
     fi
     target="$(cd "$target" && pwd)"
 
-    echo -e "${CYAN}Multi-AI Platform v${MAP_VERSION}${NC}"
-    echo "Initializing workspace at: $target"
-    echo ""
+    echo -e "${CYAN}Multi-AI Platform v${MAP_VERSION}${NC}" >&2
+    echo "Initializing workspace at: $target" >&2
+    echo "" >&2
 
-    # 1. Create SESSIONS.md
+    # 1. SESSIONS.md
     if [ ! -f "$target/SESSIONS.md" ]; then
         cp "$TEMPLATE_DIR/SESSIONS.md" "$target/SESSIONS.md"
         log_ok "SESSIONS.md created"
@@ -48,37 +84,112 @@ cmd_init() {
         log_warn "SESSIONS.md already exists, skipping"
     fi
 
-    # 2. Create wiki/
+    # 2. sessions/ directory
+    mkdir -p "$target/sessions"
+    log_ok "sessions/ directory created"
+
+    # 3. wiki/
     if [ ! -d "$target/wiki" ]; then
         mkdir -p "$target/wiki/topics"
         cp "$TEMPLATE_DIR/wiki/Index.md" "$target/wiki/Index.md"
         cp "$TEMPLATE_DIR/wiki/Log.md" "$target/wiki/Log.md"
-        log_ok "wiki/ directory created (Index.md, Log.md, topics/)"
+        log_ok "wiki/ directory created"
     else
         log_warn "wiki/ already exists, skipping"
     fi
 
-    # 3. Add .gitignore entry for SESSIONS.md
-    if [ -f "$target/.gitignore" ]; then
-        if ! grep -q "^SESSIONS.md$" "$target/.gitignore"; then
-            echo -e "\n# LLM session registry (ephemeral)\nSESSIONS.md" >> "$target/.gitignore"
-            log_ok "Added SESSIONS.md to .gitignore"
-        fi
+    # 4. .gitignore
+    local gitignore="$target/.gitignore"
+    local needs_update=false
+    if [ -f "$gitignore" ]; then
+        grep -q "^SESSIONS.md$" "$gitignore" || needs_update=true
     else
-        echo -e "# LLM session registry (ephemeral)\nSESSIONS.md" > "$target/.gitignore"
-        log_ok "Created .gitignore with SESSIONS.md"
+        needs_update=true
+    fi
+    if $needs_update; then
+        echo -e "\n# MAP (ephemeral session state)\nSESSIONS.md\nsessions/" >> "$gitignore"
+        log_ok "Updated .gitignore (SESSIONS.md + sessions/)"
     fi
 
-    # 4. Inject protocol into LLM config files
+    # 5. Inject protocol
     inject_protocol "$target"
 
-    echo ""
+    # 6. Auto-configure CLI hooks
+    echo "" >&2
+    configure_hooks
+
+    echo "" >&2
     log_ok "Workspace initialized!"
-    echo ""
-    echo "Next steps:"
-    echo "  1. Start a session:  map start claude \"your task\""
-    echo "  2. Check status:     map status"
-    echo "  3. Wiki will grow as your LLM sessions discover knowledge"
+    echo "" >&2
+    echo "Usage:" >&2
+    echo "  map start claude \"your task\"    Start a tracked session" >&2
+    echo "  map status                       Show active sessions" >&2
+    echo "  map hook continue <session_id>   Continue another session" >&2
+}
+
+# ============================================================
+# Hook auto-configuration
+# ============================================================
+configure_hooks() {
+    log_info "Detecting installed CLIs and configuring hooks..."
+
+    # Claude Code
+    if command -v claude &>/dev/null; then
+        local claude_settings="$HOME/.claude/settings.json"
+        if [ -f "$claude_settings" ]; then
+            if grep -q "map hook" "$claude_settings" 2>/dev/null; then
+                log_warn "Claude hooks already configured"
+            else
+                # Use jq to add hooks if available, otherwise inform user
+                if command -v jq &>/dev/null; then
+                    local tmp="${claude_settings}.tmp"
+                    jq '.hooks = (.hooks // {}) |
+                        .hooks.SessionStart = (.hooks.SessionStart // []) + [{"type": "command", "command": "map hook start claude"}] |
+                        .hooks.SessionEnd = (.hooks.SessionEnd // []) + [{"type": "command", "command": "map hook end claude"}]' \
+                        "$claude_settings" > "$tmp" && mv "$tmp" "$claude_settings"
+                    log_ok "Claude Code hooks configured (SessionStart + SessionEnd)"
+                else
+                    log_warn "jq not found — add Claude hooks manually to ~/.claude/settings.json"
+                fi
+            fi
+        else
+            log_warn "~/.claude/settings.json not found"
+        fi
+    else
+        log_info "Claude Code not installed, skipping"
+    fi
+
+    # Gemini CLI
+    if command -v gemini &>/dev/null; then
+        local gemini_settings="$HOME/.gemini/settings.json"
+        if [ -f "$gemini_settings" ]; then
+            if grep -q "map hook" "$gemini_settings" 2>/dev/null; then
+                log_warn "Gemini hooks already configured"
+            else
+                if command -v jq &>/dev/null; then
+                    local tmp="${gemini_settings}.tmp"
+                    jq '.hooks = (.hooks // {}) |
+                        .hooks.SessionStart = [{"matcher": "startup", "hooks": [{"name": "map-session-start", "type": "command", "command": "map hook start gemini"}]}] |
+                        .hooks.SessionEnd = [{"matcher": "exit", "hooks": [{"name": "map-session-end", "type": "command", "command": "map hook end gemini"}]}]' \
+                        "$gemini_settings" > "$tmp" && mv "$tmp" "$gemini_settings"
+                    log_ok "Gemini CLI hooks configured (SessionStart + SessionEnd)"
+                else
+                    log_warn "jq not found — add Gemini hooks manually to ~/.gemini/settings.json"
+                fi
+            fi
+        else
+            log_warn "~/.gemini/settings.json not found"
+        fi
+    else
+        log_info "Gemini CLI not installed, skipping"
+    fi
+
+    # Codex CLI
+    if command -v codex &>/dev/null; then
+        log_warn "Codex CLI: no SessionEnd hook support — use 'map start codex' wrapper for session tracking"
+    else
+        log_info "Codex CLI not installed, skipping"
+    fi
 }
 
 # ============================================================
@@ -95,11 +206,9 @@ inject_protocol() {
         local fpath="$target/$config_file"
 
         if [ ! -f "$fpath" ]; then
-            # Create with protocol only
             { echo "$PROTOCOL_MARKER"; cat "$protocol_file"; echo "$PROTOCOL_MARKER_END"; } > "$fpath"
             log_ok "Created $config_file with protocol"
         elif grep -q "$PROTOCOL_MARKER" "$fpath"; then
-            # Replace: keep lines before marker + new block + lines after end marker
             local tmp="${fpath}.tmp"
             sed -n "1,/^${PROTOCOL_MARKER}$/{ /^${PROTOCOL_MARKER}$/!p; }" "$fpath" > "$tmp"
             echo "$PROTOCOL_MARKER" >> "$tmp"
@@ -109,7 +218,6 @@ inject_protocol() {
             mv "$tmp" "$fpath"
             log_ok "Updated protocol in $config_file"
         else
-            # Append protocol
             { echo ""; echo "$PROTOCOL_MARKER"; cat "$protocol_file"; echo "$PROTOCOL_MARKER_END"; } >> "$fpath"
             log_ok "Appended protocol to $config_file"
         fi
@@ -117,7 +225,131 @@ inject_protocol() {
 }
 
 # ============================================================
-# map start
+# map hook start <client> — Called by CLI SessionStart hooks
+# ============================================================
+cmd_hook_start() {
+    local client="${1:-unknown}"
+    local cname
+    cname=$(client_name "$client")
+    local session_id
+    session_id=$(make_session_id "$client")
+    local started
+    started="$(date '+%Y-%m-%d %H:%M')"
+    local started_short
+    started_short="$(date '+%m-%d %H:%M')"
+
+    ensure_sessions_md
+    ensure_sessions_dir
+    cleanup_stale
+
+    # Register in SESSIONS.md
+    echo "| ${session_id} | ${cname} | ${started_short} | ${started_short} | (starting) |" >> "SESSIONS.md"
+    log_info "Session registered: ${session_id}"
+
+    # Create session context file
+    local ctx_file="sessions/${session_id}.md"
+    sed -e "s|{{SESSION_ID}}|${session_id}|g" \
+        -e "s|{{CLIENT_NAME}}|${cname}|g" \
+        -e "s|{{STARTED}}|${started}|g" \
+        -e "s|{{TASK}}|(pending)|g" \
+        "$TEMPLATE_DIR/session-context.md" > "$ctx_file"
+    log_info "Session context: ${ctx_file}"
+
+    # Export session ID for the CLI to use
+    if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+        echo "MAP_SESSION_ID=${session_id}" >> "$CLAUDE_ENV_FILE"
+    fi
+
+    # Output other active/recent sessions for LLM context (stdout → LLM)
+    local other_sessions
+    other_sessions=$(grep "^| " "SESSIONS.md" | grep -v "Session ID\|---\|${session_id}" || true)
+    if [ -n "$other_sessions" ]; then
+        echo "[MAP] Other active sessions:"
+        echo "$other_sessions"
+        echo ""
+    fi
+
+    # Output most recent interrupted/completed session for continuity
+    local latest
+    latest=$(ls -t sessions/*.md 2>/dev/null | grep -v "${session_id}" | head -1 || true)
+    if [ -n "$latest" ] && [ -f "$latest" ]; then
+        local status
+        status=$(grep "^\- \*\*Status\*\*:" "$latest" | head -1 || true)
+        if echo "$status" | grep -q "active\|interrupted"; then
+            echo "[MAP] Recent session available for continuation:"
+            echo "  File: $latest"
+            head -20 "$latest"
+            echo "..."
+            echo ""
+            echo "To continue this session, the LLM should read sessions/$(basename "$latest") and update its own session file."
+        fi
+    fi
+}
+
+# ============================================================
+# map hook end <client> — Called by CLI SessionEnd hooks
+# ============================================================
+cmd_hook_end() {
+    local client="${1:-unknown}"
+
+    # Find this client's active session in SESSIONS.md
+    local session_id
+    session_id=$(grep "^| ${client}-" "SESSIONS.md" 2>/dev/null | tail -1 | awk -F'|' '{print $2}' | tr -d ' ' || true)
+
+    if [ -z "$session_id" ]; then
+        log_warn "No active session found for ${client}"
+        return
+    fi
+
+    # Remove from SESSIONS.md
+    local tmp="SESSIONS.md.tmp"
+    grep -v "^| ${session_id} " "SESSIONS.md" > "$tmp" 2>/dev/null || true
+    mv "$tmp" "SESSIONS.md"
+    log_info "Session unregistered: ${session_id}"
+
+    # Update session file status
+    local ctx_file="sessions/${session_id}.md"
+    if [ -f "$ctx_file" ]; then
+        sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: completed/' "$ctx_file" 2>/dev/null || true
+        log_info "Session marked completed: ${ctx_file}"
+    fi
+}
+
+# ============================================================
+# map hook continue <session_id> — Continue another session
+# ============================================================
+cmd_hook_continue() {
+    local target_id="${1:-}"
+
+    if [ -z "$target_id" ]; then
+        log_err "Usage: map hook continue <session_id>"
+        # List available sessions
+        echo "Available sessions:" >&2
+        ls -t sessions/*.md 2>/dev/null | while read -r f; do
+            local name status
+            name=$(basename "$f" .md)
+            status=$(grep "^\- \*\*Status\*\*:" "$f" | sed 's/.*: //' || echo "unknown")
+            echo "  $name ($status)" >&2
+        done
+        exit 1
+    fi
+
+    local ctx_file="sessions/${target_id}.md"
+    if [ ! -f "$ctx_file" ]; then
+        log_err "Session file not found: ${ctx_file}"
+        exit 1
+    fi
+
+    # Output full session context (stdout → LLM)
+    echo "[MAP] Continuing session: ${target_id}"
+    echo ""
+    cat "$ctx_file"
+    echo ""
+    echo "[MAP] Please continue the work described above. Update your session file with new progress."
+}
+
+# ============================================================
+# map start <client> [task] — User-facing wrapper
 # ============================================================
 cmd_start() {
     local client="${1:-}"
@@ -128,40 +360,47 @@ cmd_start() {
         exit 1
     fi
 
-    local client_name
-    case "$client" in
-        claude)  client_name="Claude Code" ;;
-        gemini)  client_name="Gemini CLI" ;;
-        codex)   client_name="Codex CLI" ;;
-        *)       log_err "Unknown client: $client (supported: claude, gemini, codex)"; exit 1 ;;
-    esac
+    local cname
+    cname=$(client_name "$client")
+    local session_id
+    session_id=$(make_session_id "$client")
+    local started
+    started="$(date '+%Y-%m-%d %H:%M')"
+    local started_short
+    started_short="$(date '+%m-%d %H:%M')"
+    local task_desc="${task:-진행 중}"
 
-    local session_id="${client}-$(date +%Y%m%d-%H%M)"
-    local started="$(date '+%m-%d %H:%M')"
-    local sessions_file="SESSIONS.md"
-
-    # Ensure SESSIONS.md exists
-    if [ ! -f "$sessions_file" ]; then
-        cp "$TEMPLATE_DIR/SESSIONS.md" "$sessions_file"
-    fi
+    ensure_sessions_md
+    ensure_sessions_dir
 
     # Register
-    local task_desc="${task:-진행 중}"
-    echo "| ${session_id} | ${client_name} | ${started} | ${started} | ${task_desc} |" >> "$sessions_file"
+    echo "| ${session_id} | ${cname} | ${started_short} | ${started_short} | ${task_desc} |" >> "SESSIONS.md"
+
+    # Create session context file
+    local ctx_file="sessions/${session_id}.md"
+    sed -e "s|{{SESSION_ID}}|${session_id}|g" \
+        -e "s|{{CLIENT_NAME}}|${cname}|g" \
+        -e "s|{{STARTED}}|${started}|g" \
+        -e "s|{{TASK}}|${task_desc}|g" \
+        "$TEMPLATE_DIR/session-context.md" > "$ctx_file"
+
     log_info "Session registered: ${session_id} — ${task_desc}"
+    log_info "Context file: ${ctx_file}"
 
     # Trap for cleanup
     cleanup() {
-        if [ -f "$sessions_file" ]; then
-            local tmp="${sessions_file}.tmp"
-            grep -v "^| ${session_id} " "$sessions_file" > "$tmp" 2>/dev/null || true
-            mv "$tmp" "$sessions_file"
-            log_info "Session unregistered: ${session_id}"
+        if [ -f "SESSIONS.md" ]; then
+            local tmp="SESSIONS.md.tmp"
+            grep -v "^| ${session_id} " "SESSIONS.md" > "$tmp" 2>/dev/null || true
+            mv "$tmp" "SESSIONS.md"
         fi
+        if [ -f "$ctx_file" ]; then
+            sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: completed/' "$ctx_file" 2>/dev/null || true
+        fi
+        log_info "Session unregistered: ${session_id}"
     }
     trap cleanup EXIT
 
-    # Launch CLI
     exec "$client"
 }
 
@@ -169,35 +408,43 @@ cmd_start() {
 # map status
 # ============================================================
 cmd_status() {
-    echo -e "${CYAN}Multi-AI Platform Status${NC}"
-    echo ""
+    echo -e "${CYAN}Multi-AI Platform Status${NC}" >&2
+    echo "" >&2
 
     # Sessions
     if [ -f "SESSIONS.md" ]; then
         local count
-        count=$(grep -c "^|" SESSIONS.md | tail -1)
-        count=$((count - 2))  # subtract header + separator
-        [ "$count" -lt 0 ] && count=0
-        echo -e "Sessions: ${GREEN}${count} active${NC}"
+        count=$(grep -c "^| [a-z]" SESSIONS.md 2>/dev/null || echo "0")
+        echo -e "Sessions: ${GREEN}${count} active${NC}" >&2
         if [ "$count" -gt 0 ]; then
-            grep "^|" SESSIONS.md | tail -n +"3"
+            grep "^| [a-z]" SESSIONS.md >&2
         fi
     else
-        echo -e "Sessions: ${YELLOW}SESSIONS.md not found${NC}"
+        echo -e "Sessions: ${YELLOW}SESSIONS.md not found${NC}" >&2
     fi
 
-    echo ""
+    # Session files
+    if [ -d "sessions" ]; then
+        local total active completed interrupted
+        total=$(find sessions -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+        active=$(grep -rl "Status.*active" sessions/*.md 2>/dev/null | wc -l | tr -d ' ')
+        completed=$(grep -rl "Status.*completed" sessions/*.md 2>/dev/null | wc -l | tr -d ' ')
+        interrupted=$(grep -rl "Status.*interrupted" sessions/*.md 2>/dev/null | wc -l | tr -d ' ')
+        echo -e "Session files: ${total} total (${GREEN}${active} active${NC}, ${completed} completed, ${YELLOW}${interrupted} interrupted${NC})" >&2
+    fi
+
+    echo "" >&2
 
     # Wiki
     if [ -d "wiki/topics" ]; then
         local topics
         topics=$(find wiki/topics -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
-        echo -e "Wiki: ${GREEN}${topics} topics${NC}"
+        echo -e "Wiki: ${GREEN}${topics} topics${NC}" >&2
         if [ -f "wiki/Index.md" ]; then
-            grep "^|" wiki/Index.md | grep -v "Topic\|---" 2>/dev/null || true
+            grep "^|" wiki/Index.md | grep -v "Topic\|---" 2>/dev/null >&2 || true
         fi
     else
-        echo -e "Wiki: ${YELLOW}not initialized${NC}"
+        echo -e "Wiki: ${YELLOW}not initialized${NC}" >&2
     fi
 }
 
@@ -215,6 +462,15 @@ cmd_sync() {
 case "${1:-}" in
     init)    shift; cmd_init "$@" ;;
     start)   shift; cmd_start "$@" ;;
+    hook)
+        shift
+        case "${1:-}" in
+            start)    shift; cmd_hook_start "$@" ;;
+            end)      shift; cmd_hook_end "$@" ;;
+            continue) shift; cmd_hook_continue "$@" ;;
+            *)        log_err "Usage: map hook <start|end|continue> [args]"; exit 1 ;;
+        esac
+        ;;
     status)  cmd_status ;;
     sync)    cmd_sync ;;
     version) echo "map v${MAP_VERSION}" ;;
@@ -222,11 +478,14 @@ case "${1:-}" in
         echo "map — Multi-AI Platform CLI v${MAP_VERSION}"
         echo ""
         echo "Commands:"
-        echo "  init [path]              Initialize a workspace"
-        echo "  start <client> [task]    Start LLM session with tracking"
-        echo "  status                   Show active sessions and wiki"
-        echo "  sync                     Re-inject protocol into config files"
-        echo "  version                  Show version"
+        echo "  init [path]                    Initialize workspace + configure hooks"
+        echo "  start <client> [task]          Start LLM session with tracking"
+        echo "  hook start <client>            (Auto) Called by CLI SessionStart hooks"
+        echo "  hook end <client>              (Auto) Called by CLI SessionEnd hooks"
+        echo "  hook continue <session_id>     Continue another CLI's session"
+        echo "  status                         Show active sessions and wiki"
+        echo "  sync                           Re-inject protocol into config files"
+        echo "  version                        Show version"
         ;;
     *)
         log_err "Unknown command: $1"

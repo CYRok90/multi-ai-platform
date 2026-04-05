@@ -31,7 +31,10 @@ your-project/
 ├── CLAUDE.md        # Protocol injected
 ├── GEMINI.md        # Protocol injected
 ├── AGENTS.md        # Protocol injected
-├── SESSIONS.md      # Active session registry (gitignored)
+├── SESSIONS.md      # Session index (gitignored)
+├── sessions/        # Session context files (gitignored)
+│   ├── claude-20260405-2230.md
+│   └── gemini-20260405-2245.md
 └── wiki/            # Persistent knowledge base
     ├── Index.md     # Topic catalog
     ├── Log.md       # Chronological change log
@@ -40,16 +43,37 @@ your-project/
 
 ## How it works
 
-### Session Layer (SESSIONS.md)
-- Session start: register yourself, see what other sessions are doing
-- Session end: unregister (or `map start` wrapper handles it via trap)
-- Stale entries (>2h) are auto-cleaned by the next session
+### Session Layer (SESSIONS.md + sessions/)
+- **SESSIONS.md** = index (누가, 언제, 무엇)
+- **sessions/{id}.md** = context (진행상황, 결정, 블로커 상세)
+- Session start: hook이 자동으로 SESSIONS.md 등록 + sessions/ 파일 생성
+- Session end: hook이 자동으로 정리
+- **Cross-CLI handoff**: Claude가 rate limit 걸리면 Gemini가 세션 파일을 읽고 이어받기
 
 ### Memory Layer (wiki/)
 - Karpathy-style LLM-maintained wiki ([reference](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f))
 - LLMs discover knowledge during work and write it to topic pages
 - Index.md is the only mandatory read on session start (token-efficient)
 - Topics are loaded selectively, not all at once
+
+### Hooks (v0.2.0)
+`map init`이 CLI별 SessionStart/SessionEnd hook을 자동 설정한다.
+LLM이 프로토콜을 따르지 않아도 hook이 강제로 세션을 관리한다.
+
+| CLI | SessionStart | SessionEnd | 비고 |
+|-----|-------------|-----------|------|
+| Claude Code | `map hook start claude` | `map hook end claude` | 자동 설정 |
+| Gemini CLI | `map hook start gemini` | `map hook end gemini` | 자동 설정 |
+| Codex CLI | — | — | `map start codex` 래퍼 사용 |
+
+### Cross-CLI Session Handoff
+
+```bash
+# Claude에서 작업 중 rate limit 발생
+# → Gemini에서 이어받기:
+map hook continue claude-20260405-2230
+# → 이전 세션의 Progress, Current State, Blockers가 컨텍스트로 주입됨
+```
 
 ### Protocol
 The same protocol is injected into CLAUDE.md, GEMINI.md, and AGENTS.md.
@@ -59,8 +83,11 @@ Every LLM follows identical rules regardless of which client is used.
 
 | Command | Description |
 |---------|-------------|
-| `map init [path]` | Initialize workspace with sessions + wiki |
-| `map start <claude\|gemini\|codex> [task]` | Start tracked session |
+| `map init [path]` | Initialize workspace + auto-configure hooks |
+| `map start <client> [task]` | Start tracked session (wrapper) |
+| `map hook start <client>` | (Auto) Called by CLI SessionStart hooks |
+| `map hook end <client>` | (Auto) Called by CLI SessionEnd hooks |
+| `map hook continue <session_id>` | Continue another CLI's session |
 | `map status` | Show active sessions and wiki stats |
 | `map sync` | Re-inject protocol into config files |
 
