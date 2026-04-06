@@ -290,6 +290,16 @@ cmd_hook_start() {
         echo "MAP_SESSION_ID=${session_id}" >> "$CLAUDE_ENV_FILE"
     fi
 
+    # === LLM Context Injection (stdout → LLM) ===
+    echo "[MAP SESSION] Your session file: sessions/${session_id}.md"
+    echo "[MAP SESSION] You MUST update this file during work:"
+    echo "  - Update **Task** field with the actual task description on first user message"
+    echo "  - Append to ## Log when completing meaningful work: - [HH:MM] <request> → <result>"
+    echo "  - Record key decisions in ## Decisions"
+    echo "  - Record blockers in ## Blockers"
+    echo "  - On session end: fill ## Wiki Extractions with knowledge worth preserving"
+    echo ""
+
     # Check for previous sessions with empty Wiki Extractions
     for prev_file in $(ls -t sessions/*.md 2>/dev/null | head -5); do
         [ "$prev_file" = "sessions/${session_id}.md" ] && continue

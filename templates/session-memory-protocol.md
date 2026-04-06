@@ -3,16 +3,22 @@
 모든 LLM 세션(Claude, Gemini, Codex)이 동일하게 따르는 프로토콜.
 이를 통해 서로 다른 인터페이스/모델 간 세션 인지와 지식 공유를 달성한다.
 
-## Session Layer (SESSIONS.md)
+## Session Layer (SESSIONS.md + sessions/)
 
-### 세션 시작
-1. `SESSIONS.md` 읽기 -- 다른 활성 세션이 무엇을 하고 있는지 파악
-2. 자기 항목 추가: `| {client}-{YYYYMMDD}-{HHMM} | {Client Name} | {MM-DD HH:MM} | {MM-DD HH:MM} | {작업 요약} |`
-3. 2시간 이상 업데이트 없는 항목이 있으면 stale로 판단하여 삭제하고 wiki/Log.md에 기록
+SESSIONS.md 등록/해제와 sessions/ 파일 생성은 hook이 자동 처리한다.
+LLM의 핵심 의무는 **sessions/{MAP_SESSION_ID}.md 파일을 업데이트하는 것**이다.
 
-### 세션 중
-- 작업 전환 또는 유의미한 마일스톤 달성 시에만 "Working On"과 "Last Update" 갱신
-- 매 턴마다 갱신하지 않는다 (토큰/레이턴시 낭비 방지)
+### 세션 시작 (hook이 자동 처리)
+- SESSIONS.md에 항목 추가
+- `sessions/{id}.md` 파일 생성
+- LLM 컨텍스트에 세션 파일 경로 주입
+
+### 세션 중 — LLM이 반드시 수행할 것 (CRITICAL)
+1. 첫 사용자 메시지 후 `sessions/{id}.md`의 **Task** 필드를 실제 작업 내용으로 업데이트
+2. 의미있는 작업 단위 완료 시 `## Log`에 append: `- [HH:MM] <요청 요약> → <결과>`
+3. 주요 결정 시 `## Decisions`에 기록
+4. 블로커 발생 시 `## Blockers`에 기록
+5. 매 턴마다 기록하지 않는다 — 의미있는 마일스톤에서만
 
 ### 세션 종료
 - SESSIONS.md에서 자기 항목 삭제
