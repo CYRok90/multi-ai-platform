@@ -113,6 +113,24 @@ map hook continue claude-20260405-2230
 | `map hook continue <session_id>` | Continue another CLI's session |
 | `map status` | Show active sessions and wiki stats |
 | `map sync` | Re-inject protocol into config files |
+| `map council [-r N] [-m MODE] "topic"` | Run multi-LLM debate council (Claude + Gemini + Codex) |
+
+### Council Command
+
+`map council` wraps [council.sh](https://github.com/CYRok90/rakku-workspace/blob/main/scripts/council.sh) — a multi-round debate orchestrator that runs Claude, Gemini, and Codex in parallel and synthesizes a consensus answer.
+
+```bash
+map council "REST vs gRPC"
+map council -m adversarial -r 3 "Kafka vs Pulsar"
+map council -m pipeline "Migration strategy"
+```
+
+**Script resolution order** (first found wins):
+1. `$MAP_COUNCIL_SCRIPT` env var
+2. `./scripts/council.sh` (workspace-local)
+3. `~/Develop/rakku-workspace/scripts/council.sh` (fallback)
+
+**Modes**: `debate` (default) | `adversarial` | `pipeline`
 
 ## Access Methods
 

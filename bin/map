@@ -514,6 +514,41 @@ cmd_status() {
 }
 
 # ============================================================
+# map council [flags] "topic" — Wrapper around council.sh
+# ============================================================
+cmd_council() {
+    if [ $# -eq 0 ]; then
+        log_err "Usage: map council [-r rounds] [-m mode] \"topic\""
+        echo "  -r N       Number of debate rounds (default: 2)" >&2
+        echo "  -m MODE    Mode: debate|adversarial|pipeline (default: debate)" >&2
+        echo "" >&2
+        echo "Examples:" >&2
+        echo "  map council \"REST vs gRPC\"" >&2
+        echo "  map council -m adversarial -r 3 \"Kafka vs Pulsar\"" >&2
+        exit 1
+    fi
+
+    # Locate council.sh
+    local council_script=""
+    if [ -n "${MAP_COUNCIL_SCRIPT:-}" ] && [ -x "$MAP_COUNCIL_SCRIPT" ]; then
+        council_script="$MAP_COUNCIL_SCRIPT"
+    elif [ -x "./scripts/council.sh" ]; then
+        council_script="./scripts/council.sh"
+    elif [ -x "$HOME/Develop/rakku-workspace/scripts/council.sh" ]; then
+        council_script="$HOME/Develop/rakku-workspace/scripts/council.sh"
+    fi
+
+    if [ -z "$council_script" ]; then
+        log_err "council.sh not found. Set MAP_COUNCIL_SCRIPT or place council.sh at ./scripts/council.sh"
+        echo "" >&2
+        echo "Download: https://github.com/CYRok90/rakku-workspace/blob/main/scripts/council.sh" >&2
+        exit 1
+    fi
+
+    exec "$council_script" "$@"
+}
+
+# ============================================================
 # map sync
 # ============================================================
 cmd_sync() {
@@ -538,6 +573,7 @@ case "${1:-}" in
         ;;
     status)  cmd_status ;;
     sync)    cmd_sync ;;
+    council) shift; cmd_council "$@" ;;
     version) echo "map v${MAP_VERSION}" ;;
     -h|--help|help|"")
         echo "map — Multi-AI Platform CLI v${MAP_VERSION}"
@@ -550,6 +586,7 @@ case "${1:-}" in
         echo "  hook continue <session_id>     Continue another CLI's session"
         echo "  status                         Show active sessions and wiki"
         echo "  sync                           Re-inject protocol into config files"
+        echo "  council [-r N] [-m MODE] \"topic\"  Run multi-LLM debate council"
         echo "  version                        Show version"
         ;;
     *)
