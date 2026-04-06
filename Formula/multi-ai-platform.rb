@@ -1,8 +1,8 @@
 class MultiAiPlatform < Formula
   desc "Cross-client LLM session sharing and persistent memory system"
   homepage "https://github.com/CYRok90/multi-ai-platform"
-  url "https://github.com/CYRok90/multi-ai-platform/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "8b5f8407ad277dd4441f66d19c9d3eecdcc302ac8c6667e6966215b1f4d3e69d"
+  url "https://github.com/CYRok90/multi-ai-platform/archive/refs/tags/v0.2.0.tar.gz"
+  sha256 "19991e338af3fadf03d4f9f535cd790e7034b5c319f95cee8d7993144596e17f"
   license "MIT"
 
   def install

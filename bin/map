@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-MAP_VERSION="0.2.0"
+MAP_VERSION="0.3.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -107,8 +107,8 @@ cmd_init() {
         needs_update=true
     fi
     if $needs_update; then
-        echo -e "\n# MAP (ephemeral session state)\nSESSIONS.md\nsessions/" >> "$gitignore"
-        log_ok "Updated .gitignore (SESSIONS.md + sessions/)"
+        echo -e "\n# MAP (ephemeral session index)\nSESSIONS.md" >> "$gitignore"
+        log_ok "Updated .gitignore (SESSIONS.md)"
     fi
 
     # 5. Inject protocol
@@ -311,7 +311,15 @@ cmd_hook_end() {
     local ctx_file="sessions/${session_id}.md"
     if [ -f "$ctx_file" ]; then
         sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: completed/' "$ctx_file" 2>/dev/null || true
+        sed -i '' "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/" "$ctx_file" 2>/dev/null || true
         log_info "Session marked completed: ${ctx_file}"
+
+        # Prompt LLM to extract wiki knowledge (stdout → LLM)
+        echo ""
+        echo "[MAP] Session ended: ${session_id}"
+        echo "[MAP] Review sessions/${session_id}.md and:"
+        echo "[MAP]   1. Extract wiki-worthy knowledge to wiki/topics/"
+        echo "[MAP]   2. Fill ## Wiki Extractions in sessions/${session_id}.md"
     fi
 }
 
