@@ -188,6 +188,19 @@ map council -m pipeline "Migration strategy"
 MAP_WORKSPACE_DIR=/path/to/your/workspace
 ```
 
+## GitAgent Compatibility
+
+MAP는 [GitAgent](https://github.com/open-gitagent/gitagent) 표준과 호환된다.
+`map init`이 생성하는 `agent.yaml`, `SOUL.md`, `RULES.md`는 GitAgent spec을 따른다.
+
+| 파일 | GitAgent 역할 | MAP 역할 |
+|------|-------------|---------|
+| `agent.yaml` | 에이전트 메타데이터 | 워크스페이스 설정 (자동 관리) |
+| `SOUL.md` | 에이전트 정체성 | 사용자/에이전트 커스터마이즈 |
+| `RULES.md` | 행동 규칙 | 에이전트 자동 학습 (Must Always/Must Never/Learned) |
+
+`gitagent validate`로 MAP 워크스페이스의 GitAgent 규격 준수를 검증할 수 있다.
+
 ## Design Principles
 
 - **File-based**: No database, no server, no infrastructure
