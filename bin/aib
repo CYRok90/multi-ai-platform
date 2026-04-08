@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# aib — AI Barracks CLI v0.7.2
+# aib — AI Barracks CLI v0.8.0
 # Usage: aib <command> [args]
 #
 # Commands:
 #   init [path]                              Initialize barrack + configure hooks
-#   start <client> [task]                    Start LLM session with tracking
+#   start <client> [task] [--skip-permissions]  Start LLM session with tracking
 #   hook start <client>                      (Internal) Called by CLI SessionStart hooks
 #   hook end <client>                        (Internal) Called by CLI SessionEnd hooks
 #   hook continue <session_id>               Continue a session from another CLI
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="0.7.2"
+AIB_VERSION="0.8.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -616,11 +616,26 @@ cmd_hook_continue() {
 # aib start <client> [task] — User-facing wrapper
 # ============================================================
 cmd_start() {
-    local client="${1:-}"
-    local task="${2:-}"
+    local client=""
+    local task=""
+    local skip_permissions=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --skip-permissions) skip_permissions=true; shift ;;
+            -*)  log_err "Unknown option: $1"; exit 1 ;;
+            *)
+                if [ -z "$client" ]; then
+                    client="$1"
+                elif [ -z "$task" ]; then
+                    task="$1"
+                fi
+                shift ;;
+        esac
+    done
 
     if [ -z "$client" ]; then
-        log_err "Usage: aib start <claude|gemini|codex> [task description]"
+        log_err "Usage: aib start <claude|gemini|codex> [task] [--skip-permissions]"
         exit 1
     fi
 
@@ -683,12 +698,28 @@ cmd_start() {
     # Write active session marker
     echo "${session_id}" > "sessions/.active"
 
+    # Build permission-skip flags per client
+    local skip_flags=""
+    if $skip_permissions; then
+        case "$client" in
+            claude) skip_flags="--dangerously-skip-permissions" ;;
+            gemini) skip_flags="--yolo" ;;
+            codex)  skip_flags="--full-auto" ;;
+            *)      log_warn "Unknown client '$client': --skip-permissions ignored" ;;
+        esac
+        [ -n "$skip_flags" ] && log_warn "Permission skip enabled: $skip_flags"
+    fi
+
     # Launch CLI with script capture (Gemini/Codex)
     # Claude uses $CLAUDE_TRANSCRIPT_PATH instead (handled in hook end)
     if [ "$client" = "claude" ]; then
-        exec "$client"
+        exec "$client" $skip_flags
     else
-        script -q "$raw_file" "$client"
+        if [ -n "$skip_flags" ]; then
+            script -q "$raw_file" "$client" $skip_flags
+        else
+            script -q "$raw_file" "$client"
+        fi
     fi
 }
 
@@ -1147,7 +1178,7 @@ case "${1:-}" in
         echo ""
         echo "Commands:"
         echo "  init [path]                    Initialize barrack + configure hooks"
-        echo "  start <client> [task]          Start LLM session with tracking"
+        echo "  start <client> [task] [--skip-permissions]  Start LLM session with tracking"
         echo "  hook start <client>            (Auto) Called by CLI SessionStart hooks"
         echo "  hook end <client>              (Auto) Called by CLI SessionEnd hooks"
         echo "  hook continue <session_id>     Continue another CLI's session"

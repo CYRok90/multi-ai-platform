@@ -12,6 +12,7 @@ brew install ai-barracks
 
 aib init ~/my-project       # Initialize barrack + auto-configure hooks
 aib start claude "my task"  # Or just run `claude` directly (hooks handle it)
+aib start claude "my task" --skip-permissions  # Skip permission prompts
 aib status                  # Show active agents and wiki
 ```
 
@@ -128,7 +129,7 @@ aib hook continue claude-20260405-2230
 | Command | Description |
 |---------|-------------|
 | `aib init [path]` | Initialize barrack + auto-configure hooks |
-| `aib start <client> [task]` | Deploy agent for tracked session (wrapper) |
+| `aib start <client> [task] [--skip-permissions]` | Deploy agent for tracked session (wrapper) |
 | `aib hook start <client>` | (Auto) Called by CLI SessionStart hooks |
 | `aib hook end <client>` | (Auto) Called by CLI SessionEnd hooks |
 | `aib hook continue <session_id>` | Continue another CLI's session |
@@ -137,6 +138,24 @@ aib hook continue claude-20260405-2230
 | `aib sync [--dry-run] [path]` | Sync templates + protocol to barrack (idempotent upgrade) |
 | `aib council [-r N] [-m MODE] "topic"` | Run multi-LLM debate council (Claude + Gemini + Codex) |
 | `aib version` | Show version |
+
+### `--skip-permissions`
+
+`aib start`에 `--skip-permissions` 플래그를 추가하면 각 CLI의 permission prompt를 자동으로 스킵한다.
+
+```bash
+aib start claude "refactor auth" --skip-permissions
+aib start gemini "analyze logs" --skip-permissions
+aib start codex "fix tests" --skip-permissions
+```
+
+| Client | Mapped Flag | Effect |
+|--------|------------|--------|
+| Claude | `--dangerously-skip-permissions` | 모든 tool call 자동 승인 |
+| Gemini | `--yolo` | Sandbox 비활성화 + 자동 승인 |
+| Codex  | `--full-auto` | 자동 실행 모드 |
+
+> **주의**: 신뢰할 수 없는 환경이나 프로덕션에서는 사용하지 마세요. 모든 tool call이 확인 없이 실행됩니다.
 
 ### Council Command
 
