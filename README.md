@@ -32,6 +32,10 @@ your-barrack/
 │   ├── .active      # Current session ID marker
 │   ├── claude-20260405-2230.md
 │   └── gemini-20260405-2245.md
+├── docs/            # Protocol detail guides (system-managed)
+│   ├── session-protocol.md
+│   ├── growth-protocol.md
+│   └── wiki-protocol.md
 └── wiki/            # Persistent knowledge base (장기 기억)
     ├── Index.md     # Topic catalog
     ├── Log.md       # Chronological change log
@@ -117,13 +121,14 @@ SessionStart Hook                    임무 수행 중                     Sessi
 │ 1. Stale 에이전트 정리  │           │ • Log에 작업 기록  │           │ 1. SESSIONS.md 항목 삭제│
 │ 2. SESSIONS.md 등록    │           │ • Decisions 기록   │           │ 2. Status → completed  │
 │ 3. sessions/{id}.md 생성│          │ • Blockers 기록    │           │ 3. Ended 타임스탬프     │
-│ 4. 배럭 메타데이터 갱신  │          │ • wiki 업데이트    │           │ 4. Auto-summary 생성   │
-│ 5. 이전 세션 미추출 알림 │          └────────────────────┘           └─────────────────────────┘
-│ 6. 활성 세션 컨텍스트   │
+│ 4. 배럭 메타데이터 갱신  │          │ • Retries 기록     │           │ 4. Auto-summary 생성   │
+│ 5. Violation 주입 ★    │          │ • wiki 업데이트    │           │ 5. Violation 기록 ★    │
+│ 6. Blocker carry-over ★│          └────────────────────┘           └─────────────────────────┘
+│ 7. 활성 세션 컨텍스트   │
 │    stdout → LLM 주입   │
-└─────────────────────────┘                                           다음 SessionStart에서:
-                                                                      → Wiki Extractions 비어있으면
-                                                                        LLM에게 추출 요청
+└─────────────────────────┘                                           ★ v0.9.0: 불변식 위반을
+                                                                        .violations 파일로 기록 →
+                                                                        다음 Start에서 LLM에 주입
 ```
 
 **핵심 원칙**: hook end는 기계적 정리만, hook start는 LLM 컨텍스트 주입 담당.
@@ -175,6 +180,7 @@ aib hook continue claude-20260405-2230
 | `aib hook continue <session_id>` | Continue another CLI's session |
 | `aib barracks [list\|remove\|route\|refresh]` | Manage registered barracks globally |
 | `aib status` | Show active agents and wiki stats |
+| `aib wiki lint [--fix]` | Check wiki health and freshness (STALE, OVERSIZED, MISSING, DUPLICATE) |
 | `aib sync [--dry-run] [path]` | Sync templates + protocol to barrack (idempotent upgrade) |
 | `aib council [-r N] [-m MODE] "topic"` | Run multi-LLM debate council (Claude + Gemini + Codex) |
 | `aib version` | Show version |
@@ -316,7 +322,8 @@ aib sync --dry-run           # 변경 예정 사항만 미리 확인
 | **Protocol injection** | CLAUDE.md, GEMINI.md, AGENTS.md | 마커(`<!-- AIB:... -->`) 안쪽만 교체, 사용자 내용 보존 |
 | **Section guard** | SOUL.md, RULES.md | 템플릿의 H2 섹션이 누락되면 빈 스텁으로 추가. 기존 내용 불변 |
 | **YAML field merge** | agent.yaml | 누락된 top-level 키만 기본값으로 추가. 기존 키 불변 |
-| **Scaffold** | wiki/Index.md, wiki/Log.md, 새 템플릿 | 파일 없으면 생성, 있으면 skip |
+| **Scaffold** | wiki/Index.md, wiki/Log.md, GROWTH.md | 파일 없으면 생성, 있으면 skip |
+| **System** | docs/*.md | 매 sync 시 항상 템플릿에서 덮어쓰기 (시스템 문서) |
 
 `aib_version` 필드가 `agent.yaml`에 자동 스탬프되어 각 배럭의 마지막 sync 버전을 추적한다.
 
@@ -378,6 +385,7 @@ CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있다.
 
 - **File-based**: No database, no server, no infrastructure
 - **Hook-enforced**: LLM이 프로토콜을 무시해도 hook이 강제 관리
+- **Invariant enforcement**: 불변식 위반을 기계적으로 감지하고 다음 세션에 remediation 주입
 - **Permanent history**: sessions/는 삭제하지 않는 Veritable Records aka 'Silok'
 - **Knowledge extraction**: 세션 → wiki 추출로 지식이 누적
 - **Cross-CLI**: 어떤 CLI에서든 이전 에이전트 세션을 이어받을 수 있음
