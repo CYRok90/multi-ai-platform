@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.0.0"
+AIB_VERSION="1.0.1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -33,6 +33,48 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
 log_err()  { echo -e "${RED}[ERR]${NC}  $1" >&2; }
 
 # --- Helpers ---
+# validate_claude_settings — scan .claude/settings*.json for unmatched quotes in
+# Bash(...) permission patterns. Claude Code 2.1.118 renders an invisible
+# Settings dialog in some PTY environments (e.g. Tauri/portable_pty inside
+# CommandCenter) when these are present, gating all stdin and making the TUI
+# appear frozen. Print warnings before launch so the user can fix the file.
+validate_claude_settings() {
+    command -v python3 &>/dev/null || return 0
+    local out
+    out=$(python3 - <<'PY' 2>/dev/null
+import json, os
+broken = []
+for path in ('.claude/settings.local.json', '.claude/settings.json'):
+    if not os.path.isfile(path):
+        continue
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        continue
+    allow = (data.get('permissions') or {}).get('allow') or []
+    for entry in allow:
+        if not (isinstance(entry, str) and entry.startswith('Bash(') and entry.endswith(')')):
+            continue
+        inner = entry[5:-1]
+        if inner.count("'") % 2 == 1 or inner.count('"') % 2 == 1:
+            broken.append(f"{path}: {entry}")
+for b in broken:
+    print(b)
+PY
+)
+    [ -z "$out" ] && return 0
+    local count
+    count=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+    log_warn "${count} broken Bash() permission pattern(s) detected in .claude/settings*.json:"
+    printf '%s\n' "$out" | head -3 | while IFS= read -r line; do
+        log_warn "  ${line}"
+    done
+    log_warn "Claude 2.1.118 may render an invisible Settings dialog and ignore all stdin (incl. Ctrl+C) inside CommandCenter PTY."
+    log_warn "Fix: balance quotes in .claude/settings.local.json. See https://github.com/ai-barracks/ai-barracks/blob/main/docs/troubleshooting.md"
+    return 0
+}
+
 client_name() {
     case "$1" in
         claude) echo "Claude Code" ;;
@@ -833,7 +875,7 @@ cmd_start() {
         case "$client" in
             claude) skip_flags="--dangerously-skip-permissions" ;;
             gemini) skip_flags="--yolo" ;;
-            codex)  skip_flags="--full-auto" ;;
+            codex)  skip_flags="--dangerously-bypass-approvals-and-sandbox" ;;
             *)      log_warn "Unknown client '$client': --skip-permissions ignored" ;;
         esac
         [ -n "$skip_flags" ] && log_warn "Permission skip enabled: $skip_flags"
@@ -842,6 +884,7 @@ cmd_start() {
     # Launch CLI with script capture (Gemini/Codex)
     # Claude uses $CLAUDE_TRANSCRIPT_PATH instead (handled in hook end)
     if [ "$client" = "claude" ]; then
+        validate_claude_settings
         exec "$client" $skip_flags
     else
         if [ -n "$skip_flags" ]; then

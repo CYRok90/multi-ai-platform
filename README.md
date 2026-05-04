@@ -353,7 +353,7 @@ Slack 메시지 → barracks.json에서 키워드 매칭
 |--------|-------------|--------|
 | Claude | `--dangerously-skip-permissions` | 모든 tool call 자동 승인 |
 | Gemini | `--yolo` | Sandbox 비활성화 + 자동 승인 |
-| Codex | `--full-auto` | 자동 실행 모드 |
+| Codex | `--dangerously-bypass-approvals-and-sandbox` | 자동 실행 모드 (Codex CLI ≥ 0.128: 구 `--full-auto`는 거부됨) |
 
 > ⚠️ **주의**: 신뢰할 수 없는 환경이나 프로덕션에서는 사용하지 마세요. 모든 tool call이 확인 없이 실행됩니다.
 
@@ -379,6 +379,27 @@ aib sync /path/to/barrack            # 실제 적용
 | **System** | `docs/*.md` | 매 sync 시 템플릿에서 덮어쓰기 |
 
 `aib_version` 필드가 `agent.yaml`에 자동 스탬프되어 각 배럭의 마지막 sync 버전을 추적합니다.
+
+---
+
+## 🩹 Troubleshooting
+
+### Claude TUI가 CommandCenter 내장 터미널에서 입력을 안 받을 때
+
+증상: `aib start claude` 후 TUI는 보이는데 키 입력(Ctrl+C 포함)이 전부 무시되고, 외부 macOS Terminal.app에서는 같은 명령이 정상.
+
+원인: `.claude/settings.local.json`의 `permissions.allow[]` 항목 중 `Bash(...)` 패턴에 unmatched `'` 또는 `"`가 있으면, Claude Code(특정 버전 — 2.1.118 검증) 가 PTY 환경에서 Settings Error 다이얼로그를 invisible 상태로 띄우면서 stdin을 가로챕니다.
+
+진단/수정:
+1. `aib start claude`는 v1.0.1부터 launch 직전 settings JSON을 검사해 `[WARN] N broken Bash() permission pattern(s) detected ...`을 출력합니다.
+2. 경고가 뜨면 `.claude/settings.local.json`을 열어 해당 라인의 `'`/`"` 균형을 맞추거나 항목을 삭제하세요.
+3. `claude install latest --force`로 Claude Code를 최신 버전으로 갱신.
+
+### `aib start codex --skip-permissions`가 즉시 실패할 때
+
+증상: `error: unexpected argument '--full-auto' found` 후 종료.
+
+원인: Codex CLI 0.128 이상에서 `--full-auto` 플래그가 제거되고 `--dangerously-bypass-approvals-and-sandbox`로 대체되었습니다. v1.0.1부터 aib가 새 플래그를 사용합니다 — `brew upgrade ai-barracks`로 업데이트하세요.
 
 ---
 

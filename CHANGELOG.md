@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.1] - 2026-05-04
+
+### Fixed
+- **Codex `--skip-permissions` 회귀 대응**: Codex CLI 0.128에서 제거된 `--full-auto` 대신 `--dangerously-bypass-approvals-and-sandbox`를 매핑. 이전 aib는 `aib start codex --skip-permissions` 실행 시 즉시 종료됐음.
+
+### Added
+- **`validate_claude_settings()` 사전검사**: `aib start claude` launch 직전 `.claude/settings*.json`의 `permissions.allow[]` 중 `Bash(...)` 패턴 quote 균형을 검사해 깨진 항목을 경고. Claude 2.1.118이 CommandCenter PTY에서 invisible Settings 다이얼로그로 stdin을 가로채는 회귀 진단 시간 단축이 목적.
+- **README 트러블슈팅 섹션** 추가 — Claude TUI 입력 차단 / Codex `--full-auto` 거부 두 케이스 명시.
+
 ## [1.0.0] - 2026-04-17
 
 AI Barracks v1.0.0 공식 릴리즈.
